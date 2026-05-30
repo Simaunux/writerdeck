@@ -27,4 +27,5 @@ Developped to be used as a personnal journal, text editor but also as personnal 
  # Tips
 
  1.Dont forget to set up your Pi with pi os light
+ 
  2. You can navigate between TTY (the different terminals) with your apple keyboard by doing : cmd + arrow key left or right on keyboad
