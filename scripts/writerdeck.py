@@ -20,6 +20,8 @@ DOCS_DIR = os.path.expanduser("~/documents")
 # ── Dropbox sync ─────────────────────────────────────────────────────────────
 
 DROPBOX_TOKEN_FILE = os.path.expanduser("~/.dropbox_token.json")
+DROPBOX_APP_KEY    = "qaawugjaftf21d6"
+DROPBOX_APP_SECRET = "sk4vs8gmyu91q8g"
 
 def load_dropbox_client():
     """Charge le client Dropbox depuis le fichier de token permanent."""
@@ -32,8 +34,14 @@ def load_dropbox_client():
         app_secret=data["app_secret"]
     )
 
+def dropbox_configured():
+    """Vérifie si Dropbox est configuré."""
+    return os.path.exists(DROPBOX_TOKEN_FILE)
+
 def dropbox_upload(filepath):
-    """Upload silencieux vers Dropbox en arrière-plan."""
+    """Upload silencieux vers Dropbox en arrière-plan (si configuré)."""
+    if not dropbox_configured():
+        return
     def _upload():
         try:
             import dropbox
@@ -45,6 +53,127 @@ def dropbox_upload(filepath):
         except Exception:
             pass
     threading.Thread(target=_upload, daemon=True).start()
+
+def dropbox_setup(stdscr):
+    """Flow d'autorisation Dropbox en TUI."""
+    try:
+        import dropbox as dbx_module
+        from dropbox import DropboxOAuth2FlowNoRedirect
+    except ImportError:
+        return False
+
+    curses.curs_set(0)
+    stdscr.erase()
+    h, w = stdscr.getmaxyx()
+
+    lines = [
+        "",
+        "  Configuration Dropbox",
+        "",
+        "  1. Va sur : https://www.dropbox.com/developers/apps",
+        "  2. Crée une app (Scoped Access > Full Dropbox)",
+        "  3. Renseigne APP_KEY et APP_SECRET dans writerdeck.py",
+        "",
+        "  Appuie sur une touche pour lancer l'autorisation...",
+        "",
+    ]
+    for i, line in enumerate(lines):
+        try:
+            stdscr.addstr(i + 2, 0, line[:w])
+        except curses.error:
+            pass
+    stdscr.refresh()
+    stdscr.getch()
+
+    # Générer l'URL d'autorisation
+    auth_flow = DropboxOAuth2FlowNoRedirect(
+        DROPBOX_APP_KEY,
+        DROPBOX_APP_SECRET,
+        token_access_type="offline"
+    )
+    url = auth_flow.start()
+
+    stdscr.erase()
+    url_lines = [
+        "",
+        "  Ouvre ce lien dans un navigateur :",
+        "",
+        f"  {url}",
+        "",
+        "  Clique sur 'Autoriser', copie le code,",
+        "  puis reviens ici et colle-le.",
+        "",
+    ]
+    for i, line in enumerate(url_lines):
+        try:
+            stdscr.addstr(i + 1, 0, line[:w])
+        except curses.error:
+            pass
+    stdscr.refresh()
+
+    # Saisie du code
+    curses.curs_set(1)
+    prompt = "  Code d'autorisation : "
+    try:
+        stdscr.addstr(len(url_lines) + 2, 0, prompt)
+    except curses.error:
+        pass
+    stdscr.refresh()
+
+    code = ""
+    while True:
+        try:
+            ch = stdscr.get_wch()
+        except curses.error:
+            continue
+        if ch in (curses.KEY_ENTER, '\n', '\r'):
+            break
+        elif ch in (curses.KEY_BACKSPACE, '\x7f', '\x08'):
+            code = code[:-1]
+        elif isinstance(ch, str) and ch >= ' ':
+            code += ch
+        display = prompt + code
+        try:
+            stdscr.addstr(len(url_lines) + 2, 0, display[:w])
+            stdscr.move(len(url_lines) + 2, min(len(display), w - 1))
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+    curses.curs_set(0)
+
+    # Finaliser
+    try:
+        result = auth_flow.finish(code.strip())
+        token_data = {
+            "access_token":  result.access_token,
+            "refresh_token": result.refresh_token,
+            "app_key":       DROPBOX_APP_KEY,
+            "app_secret":    DROPBOX_APP_SECRET,
+        }
+        with open(DROPBOX_TOKEN_FILE, "w") as f:
+            json.dump(token_data, f)
+        os.chmod(DROPBOX_TOKEN_FILE, 0o600)
+
+        stdscr.erase()
+        try:
+            stdscr.addstr(3, 0, "  ✓ Dropbox configuré ! La sync est active.")
+            stdscr.addstr(5, 0, "  Appuie sur une touche pour continuer...")
+        except curses.error:
+            pass
+        stdscr.refresh()
+        stdscr.getch()
+        return True
+    except Exception as e:
+        stdscr.erase()
+        try:
+            stdscr.addstr(3, 0, f"  ✗ Erreur : {str(e)[:w-6]}")
+            stdscr.addstr(5, 0, "  Appuie sur une touche pour continuer sans Dropbox...")
+        except curses.error:
+            pass
+        stdscr.refresh()
+        stdscr.getch()
+        return False
 CURSOR_FILE = os.path.join(DOCS_DIR, ".cursors.json")
 FILE_EXT = ".txt"
 TAB_WIDTH = 4
@@ -690,6 +819,22 @@ def main(stdscr):
     curses.curs_set(0)
 
     ensure_docs_dir()
+
+    # Proposer la configuration Dropbox si pas encore fait
+    if not dropbox_configured():
+        stdscr.erase()
+        h, w = stdscr.getmaxyx()
+        msg1 = " Dropbox non configuré. Activer la sync ?"
+        msg2 = " [o] Configurer maintenant   [n] Continuer sans"
+        try:
+            stdscr.addstr(h // 2 - 1, 0, msg1[:w], curses.A_BOLD)
+            stdscr.addstr(h // 2 + 1, 0, msg2[:w], curses.A_DIM)
+        except curses.error:
+            pass
+        stdscr.refresh()
+        ch = stdscr.getch()
+        if ch in (ord('o'), ord('O'), ord('y'), ord('Y')):
+            dropbox_setup(stdscr)
 
     while True:
         filepath = file_browser(stdscr)
